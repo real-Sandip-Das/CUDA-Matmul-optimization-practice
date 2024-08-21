@@ -12,9 +12,9 @@
 #define CURAND_CALL(x) do { if((x)!=CURAND_STATUS_SUCCESS) { \
     printf("Error at %s:%d\n",__FILE__,__LINE__);\
     return EXIT_FAILURE;}} while(0)
-#define CEIL_DIV(X, Y) (int)ceil(X/Y)
+#define CEIL_DIV(X, Y) (int)ceil((float)X/Y)
 
-void initialize(int& M, int& N, int& K, float* &h_A, float* &h_B, float* &h_C_init, float* &h_C_final, float* &d_A, float* &d_B, float* &d_C1, float* &d_C2)
+void initialize(int& M, int& N, int& K, float* &h_A, float* &h_B, float* &h_C_init, float* &h_C_final_kernel, float* &h_C_final_cuBLAS, float* &d_A, float* &d_B, float* &d_C1, float* &d_C2)
 {
   // Input from the User
   std::cout << "Enter M, N and K:" << std::endl;
@@ -23,7 +23,8 @@ void initialize(int& M, int& N, int& K, float* &h_A, float* &h_B, float* &h_C_in
   h_A = (float *)malloc(M*K*sizeof(float));
   h_B = (float *)malloc(K*N*sizeof(float));
   h_C_init = (float *)malloc(M*N*sizeof(float));
-  h_C_final = (float *)malloc(M*N*sizeof(float));
+  h_C_final_kernel = (float *)malloc(M*N*sizeof(float));
+  h_C_final_cuBLAS = (float *)malloc(M*N*sizeof(float));
 
   // Allocate Device Memory
   CUDA_CALL_VOID(cudaMalloc((void **)&d_A, M*K*sizeof(float)));
@@ -49,13 +50,13 @@ void initialize(int& M, int& N, int& K, float* &h_A, float* &h_B, float* &h_C_in
   CUDA_CALL_VOID(cudaMemcpy(h_C_init, d_C1, M*N*sizeof(float), cudaMemcpyDeviceToHost));
 }
 
-__global__ void match_results(float *A, float *B, int* flags, int N, float eps)
+__global__ void match_results(float *A, float *B, int* flags, int M, int N, float eps)
 {
-  const uint BLOCKSIZE = blockDim.x;
+  const uint BLOCKSIZE = 32;
   const uint i = blockIdx.x * BLOCKSIZE + (threadIdx.x / BLOCKSIZE);
   const uint j = blockIdx.y * BLOCKSIZE + (threadIdx.x % BLOCKSIZE);
   const uint index = i * N + j;
-  flags[index] = (abs(A[index] - B[index]) < eps);
+  if (i < M && j < N) flags[index] = (abs(A[index] - B[index]) < eps);
 }
 
 void check_all(int *flags, int len)
@@ -77,7 +78,7 @@ void print_matrix(int height, int width, float *Mat) {
   }
 }
 
-void print_result(int M, int N, int K, float* h_A, float* h_B, float* h_C_init, float* h_C_final)
+void print_result(int M, int N, int K, float* h_A, float* h_B, float* h_C_init, float* h_C_final_kernel, float* h_C_final_cuBLAS)
 {
   //Printing h_A
   std::cout << "Matrix A:\n";
@@ -91,9 +92,13 @@ void print_result(int M, int N, int K, float* h_A, float* h_B, float* h_C_init, 
   std::cout << "Initial matrix C:\n";
   print_matrix(M, N, h_C_init);
 
-  //Printing h_C_final
-  std::cout << "Final matrix C:\n";
-  print_matrix(M, N, h_C_final);
+  //Printing h_C_final_kernel
+  std::cout << "Final matrix C given by implemented kernel:\n";
+  print_matrix(M, N, h_C_final_kernel);
+
+  //Printing h_C_final_cuBLAS
+  std::cout << "Final matrix C given by cuBLAS:\n";
+  print_matrix(M, N, h_C_final_cuBLAS);
 }
 
 __global__ void kernel_1(int M, int N, int K, float alpha, float *A, float *B, float beta, float *C) {
@@ -160,23 +165,23 @@ __global__ void kernel_3(int M, int N, int K, float alpha, float *A, float *B, f
 int main()
 {
   int M, N, K;
-  float *h_A, *h_B, *h_C_init, *h_C_final;
+  float *h_A, *h_B, *h_C_init, *h_C_final_kernel, *h_C_final_cuBLAS;
   float *d_A, *d_B, *d_C_kernel, *d_C_cuBLAS;
   float alpha = 1.0f, beta = 0.1f;
-  initialize(M, N, K, h_A, h_B, h_C_init, h_C_final, d_A, d_B, d_C_kernel, d_C_cuBLAS);
+  initialize(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS, d_A, d_B, d_C_kernel, d_C_cuBLAS);
   // TODO: generate alpha and beta randomly too
 
   // Execute implemented kernel and measure runtime
   dim3 gridDim(CEIL_DIV(M, 32), CEIL_DIV(N, 32));
   // dim3 blockDim(32, 32, 1); // Kernel 1
-  dim3 blockDim(32*32, 1); // Kernel 2, 3
+  dim3 blockDim(32 * 32); // Kernel 2, 3
   cudaEvent_t start_implem, stop_implem;
   cudaEventCreate(&start_implem);
   cudaEventCreate(&stop_implem);
   cudaEventRecord(start_implem);
   // kernel_1<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
-  // kernel_2<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
-  kernel_3<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
+  kernel_2<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
+  // kernel_3<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
   cudaDeviceSynchronize();
   cudaEventRecord(stop_implem);
   cudaEventSynchronize(stop_implem);
@@ -188,7 +193,7 @@ int main()
   cudaEventCreate(&start_cuBLAS);
   cudaEventCreate(&stop_cuBLAS);
   cudaEventRecord(start_cuBLAS);
-  cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, M, N, K, &alpha, d_A, M, d_B, K, &beta, d_C_cuBLAS, M);
+  cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, d_B, N, d_A, K, &beta, d_C_cuBLAS, N);
   cudaEventRecord(stop_cuBLAS);
   cudaEventSynchronize(stop_cuBLAS);
   cublasDestroy(handle);
@@ -197,17 +202,19 @@ int main()
   int h_flags[M*N];
   int* d_flags;
   CUDA_CALL(cudaMalloc((void **)&d_flags, M*N*sizeof(int)));
-  match_results<<<gridDim, blockDim>>>(d_C_kernel, d_C_cuBLAS, d_flags, N, 0.001);
-  CUDA_CALL(cudaMemcpy(h_flags, d_flags, M*N*sizeof(int) ,cudaMemcpyDeviceToHost));
+  match_results<<<gridDim, blockDim>>>(d_C_kernel, d_C_cuBLAS, d_flags, M, N, 0.001);
   cudaDeviceSynchronize();
+  CUDA_CALL(cudaMemcpy(h_flags, d_flags, M*N*sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CALL(cudaFree(d_flags));
   check_all(h_flags, M*N);
   // TODO: Parallelize matching
 
   // Copy resultant matrix to Host
-  cudaMemcpy(h_C_final, d_C_kernel, M*N*sizeof(float), cudaMemcpyDeviceToHost);
+  cudaMemcpy(h_C_final_kernel, d_C_kernel, M*N*sizeof(float), cudaMemcpyDeviceToHost);
+  cudaMemcpy(h_C_final_cuBLAS, d_C_cuBLAS, M*N*sizeof(float), cudaMemcpyDeviceToHost);
 
   // Print the results
-  print_result(M, N, K, h_A, h_B, h_C_init, h_C_final);
+  print_result(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS);
 
   // Speed Comparison
   float milliseconds_implem, milliseconds_cuBLAS;
@@ -228,5 +235,6 @@ int main()
   free(h_A);
   free(h_B);
   free(h_C_init);
-  free(h_C_final);
+  free(h_C_final_kernel);
+  free(h_C_final_cuBLAS);
 }
