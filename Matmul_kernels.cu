@@ -1,4 +1,8 @@
+// STD
 #include <iostream>
+#include <random>
+
+// CUDA
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <cublas_v2.h>
@@ -78,8 +82,11 @@ void print_matrix(int height, int width, float *Mat) {
   }
 }
 
-void print_result(int M, int N, int K, float* h_A, float* h_B, float* h_C_init, float* h_C_final_kernel, float* h_C_final_cuBLAS)
+void print_result(int M, int N, int K, float* h_A, float* h_B, float* h_C_init, float* h_C_final_kernel, float* h_C_final_cuBLAS, float alpha, float beta)
 {
+  //Printing alpha and beta
+  std::cout << "alpha: " << alpha << ", beta: " << beta << "\n";
+
   //Printing h_A
   std::cout << "Matrix A:\n";
   print_matrix(M, K, h_A);
@@ -167,7 +174,10 @@ int main()
   int M, N, K;
   float *h_A, *h_B, *h_C_init, *h_C_final_kernel, *h_C_final_cuBLAS;
   float *d_A, *d_B, *d_C_kernel, *d_C_cuBLAS;
-  float alpha = 1.0f, beta = 0.1f;
+  std::random_device rd;
+  std::mt19937 gen(rd()); // Mersenne Twister engine
+  std::uniform_real_distribution<> dis(0.0, 1.0);
+  float alpha = dis(gen), beta = dis(gen);
   initialize(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS, d_A, d_B, d_C_kernel, d_C_cuBLAS);
   // TODO: generate alpha and beta randomly too
 
@@ -214,7 +224,7 @@ int main()
   cudaMemcpy(h_C_final_cuBLAS, d_C_cuBLAS, M*N*sizeof(float), cudaMemcpyDeviceToHost);
 
   // Print the results
-  print_result(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS);
+  print_result(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS, alpha, beta);
 
   // Speed Comparison
   float milliseconds_implem, milliseconds_cuBLAS;
