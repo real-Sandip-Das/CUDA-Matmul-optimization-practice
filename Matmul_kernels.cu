@@ -123,8 +123,8 @@ __global__ void kernel_1(int M, int N, int K, float alpha, float *A, float *B, f
 
 __global__ void kernel_2(int M, int N, int K, float alpha, float *A, float *B, float beta, float *C) {
   const uint BLOCKSIZE = 32;
-  const uint i = blockIdx.x * blockDim.x + (threadIdx.x / BLOCKSIZE);
-  const uint j = blockIdx.y * blockDim.y + (threadIdx.x % BLOCKSIZE);
+  const uint i = blockIdx.x * BLOCKSIZE + (threadIdx.x / BLOCKSIZE);
+  const uint j = blockIdx.y * BLOCKSIZE + (threadIdx.x % BLOCKSIZE);
 
   if (i < M && j < N) {
     float acc = 0.0;
@@ -147,26 +147,25 @@ __global__ void kernel_3(int M, int N, int K, float alpha, float *A, float *B, f
   C += cRow * BLOCKSIZE * N + cCol * BLOCKSIZE;
 
   const uint threadCol = threadIdx.x % BLOCKSIZE;
-  const uint threadRow = threadIdx.y / BLOCKSIZE;
+  const uint threadRow = threadIdx.x / BLOCKSIZE;
 
   float acc = 0.0;
   for (int bkIdx = 0; bkIdx < K; bkIdx += BLOCKSIZE) {
-    As[threadRow * BLOCKSIZE + threadCol] = A[threadRow * K + threadCol];
-    Bs[threadRow * BLOCKSIZE + threadCol] = B[threadRow * N + threadCol];
+    if ((threadRow + cRow * BLOCKSIZE < M) && (threadCol + bkIdx < K)) As[threadRow * BLOCKSIZE + threadCol] = A[threadRow * K + threadCol];
+    if ((threadRow + bkIdx < K) && (threadCol + cCol * BLOCKSIZE < N)) Bs[threadRow * BLOCKSIZE + threadCol] = B[threadRow * N + threadCol];
 
     __syncthreads();
 
     A += BLOCKSIZE;
     B += BLOCKSIZE * N;
 
-    for (int dotIdx = 0; dotIdx < BLOCKSIZE; ++dotIdx) {
+    for (int dotIdx = 0; (dotIdx < BLOCKSIZE) && (dotIdx + bkIdx < K); ++dotIdx) {
       acc += As[threadRow * BLOCKSIZE + dotIdx] *
               Bs[dotIdx * BLOCKSIZE + threadCol];
     }
     __syncthreads();
   }
-  C[threadRow * N + threadCol] =
-      alpha * acc + beta * C[threadRow * N + threadCol];
+  if ((threadRow + cRow * BLOCKSIZE < M) && (threadCol + cCol * BLOCKSIZE < N)) C[threadRow * N + threadCol] = alpha * acc + beta * C[threadRow * N + threadCol];
 }
 
 int main()
@@ -183,15 +182,15 @@ int main()
 
   // Execute implemented kernel and measure runtime
   dim3 gridDim(CEIL_DIV(M, 32), CEIL_DIV(N, 32));
-  // dim3 blockDim(32, 32, 1); // Kernel 1
-  dim3 blockDim(32 * 32); // Kernel 2, 3
+  dim3 blockDim1(32, 32, 1); // Kernel 1
+  dim3 blockDim2(32 * 32); // Kernel 2, 3
   cudaEvent_t start_implem, stop_implem;
   cudaEventCreate(&start_implem);
   cudaEventCreate(&stop_implem);
   cudaEventRecord(start_implem);
-  // kernel_1<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
-  kernel_2<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
-  // kernel_3<<<gridDim, blockDim>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
+  // kernel_1<<<gridDim, blockDim1>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
+  // kernel_2<<<gridDim, blockDim2>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
+  kernel_3<<<gridDim, blockDim2>>>(M, N, K, alpha, d_A, d_B, beta, d_C_kernel);
   cudaDeviceSynchronize();
   cudaEventRecord(stop_implem);
   cudaEventSynchronize(stop_implem);
@@ -212,7 +211,7 @@ int main()
   int h_flags[M*N];
   int* d_flags;
   CUDA_CALL(cudaMalloc((void **)&d_flags, M*N*sizeof(int)));
-  match_results<<<gridDim, blockDim>>>(d_C_kernel, d_C_cuBLAS, d_flags, M, N, 0.001);
+  match_results<<<gridDim, blockDim2>>>(d_C_kernel, d_C_cuBLAS, d_flags, M, N, 0.001);
   cudaDeviceSynchronize();
   CUDA_CALL(cudaMemcpy(h_flags, d_flags, M*N*sizeof(int), cudaMemcpyDeviceToHost));
   CUDA_CALL(cudaFree(d_flags));
@@ -224,7 +223,7 @@ int main()
   cudaMemcpy(h_C_final_cuBLAS, d_C_cuBLAS, M*N*sizeof(float), cudaMemcpyDeviceToHost);
 
   // Print the results
-  print_result(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS, alpha, beta);
+  // print_result(M, N, K, h_A, h_B, h_C_init, h_C_final_kernel, h_C_final_cuBLAS, alpha, beta);
 
   // Speed Comparison
   float milliseconds_implem, milliseconds_cuBLAS;
